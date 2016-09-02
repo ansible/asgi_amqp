@@ -3,6 +3,7 @@ from __future__ import unicode_literals
 import pika
 import six
 import uuid
+import msgpack
 
 from asgiref.base_layer import BaseChannelLayer
 
@@ -21,7 +22,7 @@ class AMQPChannelLayer(BaseChannelLayer):
         connection = self.connection()
         sendchan = connection.channel()
         sendchan.queue_declare(queue=channel)
-        sendchan.basic_publish(exchange='', routing_key=channel, body=message)
+        sendchan.basic_publish(exchange='', routing_key=channel, body=self.serialize(message))
         connection.close()
 
     def receive_many(self, channels, block=False):
@@ -48,6 +49,23 @@ class AMQPChannelLayer(BaseChannelLayer):
 
     def connection(self):
         return pika.BlockingConnection(pika.connection.URLParameters(self.url))
+
+    def serialize(self, message):
+        """
+        Serializes message to a byte string.
+        """
+        value = msgpack.packb(message, use_bin_type=True)
+        if self.crypter:
+            value = self.crypter.encrypt(value)
+        return value
+
+    def deserialize(self, message):
+        """
+        Deserializes from a byte string.
+        """
+        if self.crypter:
+            message = self.crypter.decrypt(message, self.expiry + 10)
+        return msgpack.unpackb(message, encoding="utf8")
 
     def __str__(self):
         return "%s(host=%s)" % (self.__class__.__name__, self.host)
