@@ -4,16 +4,20 @@ import pika
 import six
 import uuid
 import msgpack
+import logging
+import random
 
 from asgiref.base_layer import BaseChannelLayer
 
+logging.getLogger('pika').propagate = False
+
 
 class AMQPChannelLayer(BaseChannelLayer):
-    #extensions = ["groups"]
-
-    def __init__(self, url=None, expiry=60, group_expiry=86400, capacity=100, channel_capacity=None):
-        super(AMQPChannelLayer).__init__(expiry, capacity, group_expiry, channel_capacity)
+    def __init__(self, url=None, prefix='asgi:', expiry=60, group_expiry=86400, capacity=100, channel_capacity=None):
+        super(AMQPChannelLayer, self).__init__(expiry, capacity, group_expiry, channel_capacity)
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
+        self.prefix = prefix
+        self.exchange = prefix + 'channels'
 
     def send(self, channel, message):
         assert isinstance(message, dict), "message is not a dict"
@@ -21,25 +25,40 @@ class AMQPChannelLayer(BaseChannelLayer):
 
         connection = self.connection()
         sendchan = connection.channel()
-        sendchan.queue_declare(queue=channel)
-        sendchan.basic_publish(exchange='', routing_key=channel, body=self.serialize(message))
+
+        sendchan.queue_declare(queue=channel, durable=False, exclusive=False)
+        sendchan.basic_publish(exchange='',
+                               routing_key=channel,
+                               body=self.serialize(message),
+                               properties=pika.BasicProperties(delivery_mode=1,content_type='text/plain'))
         connection.close()
 
     def receive_many(self, channels, block=False):
-        connection = self.connection()
-        recvchan = connection.channel()
-        while True:
-            next_channel = self.next_channel(channels)
-            method_frame, header_frame, body = recvchan.basic_get(next_channel)
-            if method_frame:
-                recvchan.basic_ack(method_frame.delivery_tag)
-                return next_channel, self.deserialize(body)
-            else:
-                return None, None
+        if not channels:
+            return None, None
 
-    def next_channel(self, channels):
+        connection = self.connection()
+
+        channels = list(channels)
+        random.shuffle(channels)
+
         for channel in channels:
-            yield channel
+            try:
+                recvchan = connection.channel()
+                method_frame, header_frame, body = recvchan.basic_get(queue=channel)
+                if method_frame:
+                        recvchan.basic_ack(method_frame.delivery_tag)
+                        if '!' in channel:
+                            recvchan.queue_delete(channel)
+                        connection.close()
+                        return channel, self.deserialize(body)
+            except pika.exceptions.ChannelClosed:
+                continue
+
+        if block:
+            connection.sleep(0.1)
+        connection.close()
+        return None, None
 
     def new_channel(self, pattern):
         assert isinstance(pattern, six.text_type)
@@ -55,16 +74,12 @@ class AMQPChannelLayer(BaseChannelLayer):
         Serializes message to a byte string.
         """
         value = msgpack.packb(message, use_bin_type=True)
-        if self.crypter:
-            value = self.crypter.encrypt(value)
         return value
 
     def deserialize(self, message):
         """
         Deserializes from a byte string.
         """
-        if self.crypter:
-            message = self.crypter.decrypt(message, self.expiry + 10)
         return msgpack.unpackb(message, encoding="utf8")
 
     def __str__(self):
