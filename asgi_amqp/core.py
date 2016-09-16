@@ -24,43 +24,49 @@ class AMQPChannelLayer(BaseChannelLayer):
     def send(self, channel, message):
         assert isinstance(message, dict), "message is not a dict"
         assert self.valid_channel_name(channel), "Channel name not valid"
+        # send a message to the asgi:tower exchange
+        # use the channel as the routing_key
         with kombu.Connection(self.url) as connection:
             payload = self.serialize(message)
             producer = kombu.Producer(connection, self.exchange, routing_key=channel)
-            producer.publish(payload, routing_key=channel, delivery_mode=1,
+            producer.publish(payload, routing_key=channel, delivery_mode=2,
                                 content_type='application/msgkpack', content_encoding='binary')
-        print("SEND", channel)
 
     def receive_many(self, channels, block=False):
         if not channels:
             return None, None
 
-        queue = kombu.Queue(exchange=self.exchange, exclusive=True,
+        # bind this queue to messages sent to any of the routing_keys
+        # in the channels set.
+        queue = kombu.Queue(name='asgi:tower', exchange=self.exchange, durable=True, exclusive=False,
                             bindings=[kombu.binding(self.exchange, routing_key=channel)
                                       for channel in channels])
 
         with kombu.Connection(self.url) as connection:
+            # set the qos prefetch to 1 to ensure that we handle one message
+            # from the consumer as a time.
             connection.default_channel.basic_qos(0, 1, False)
             with kombu.Consumer(connection, queues=[queue], callbacks=[self.on_message]) as consumer:
-                consumer.qos(prefetch_count=1)
                 while True:
-                    print("CONSUMING...")
+                    # check our local buffer for a message
                     if self._buffer:
-                        print("BUFFER", channel)
+                        # if we've polled a message, ack the message
                         channel, message = self._buffer.popleft()
-                        message = self.deserialize(message)
-                        return channel, message
+                        message.ack()
+
+                        payload = self.deserialize(message.body)
+                        return channel, payload
                     try:
+                        # poll for a message from the consumer
+                        consumer.qos(prefetch_count=1)
                         connection.drain_events(timeout=1)
                     except socket.timeout:
-                        continue
-        return None, None
+                        # no messages found
+                        return None, None
 
     def on_message(self, body, message):
         channel = message.delivery_info['routing_key']
-        print("MSG", channel)
-        self._buffer.append((channel, body))
-        message.ack()
+        self._buffer.append((channel, message))
 
     def new_channel(self, pattern):
         assert isinstance(pattern, six.text_type)
