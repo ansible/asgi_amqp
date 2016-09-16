@@ -1,6 +1,5 @@
 from __future__ import unicode_literals
 
-import pika
 import kombu
 import six
 import uuid
@@ -15,9 +14,9 @@ class AMQPChannelLayer(BaseChannelLayer):
     def __init__(self, url=None, prefix='asgi:', expiry=60, group_expiry=86400, capacity=100, channel_capacity=None):
         super(AMQPChannelLayer, self).__init__(expiry, capacity, group_expiry, channel_capacity)
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
-        self.prefix = prefix + 'tower'
-        self.connection = pika.BlockingConnection(pika.connection.URLParameters(self.url))
-        self.exchange = kombu.Exchange(self.prefix, type='direct')
+        self.prefix = prefix
+        self.exchange_name = self.prefix + 'tower'
+        self.exchange = kombu.Exchange(self.exchange_name, type='direct')
         self._buffer = deque()
 
         kombu.serialization.enable_insecure_serializers()
@@ -47,6 +46,7 @@ class AMQPChannelLayer(BaseChannelLayer):
                 while True:
                     print("CONSUMING...")
                     if self._buffer:
+                        print("BUFFER", channel)
                         channel, message = self._buffer.popleft()
                         message = self.deserialize(message)
                         return channel, message
