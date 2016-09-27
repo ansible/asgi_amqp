@@ -12,21 +12,39 @@ from kombu.pools import (
     connections,
     producers,
 )
+from kombu.mixins import ConsumerMixin
+from kombu import Consumer
 
-class AMQPChannelLayer(BaseChannelLayer):
+class AMQPChannelLayer(BaseChannelLayer, ConsumerMixin):
     def __init__(self, url=None, prefix='asgi:', expiry=60, group_expiry=86400, capacity=100, channel_capacity=None):
         super(AMQPChannelLayer, self).__init__(expiry, capacity, group_expiry, channel_capacity)
+
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
         self.prefix = prefix
         self.exchange_name = self.prefix + 'tower'
-        self.exchange = kombu.Exchange(self.exchange_name, type='topic')
 
         self.connection = kombu.Connection(self.url)
         self.connection.default_channel.basic_qos(0, 1, False)
+        self.pool = self.connection.ChannelPool(1)
+        #self.channel = self.pool.acquire()
+        self.channel = self.connection.default_channel
+        
+        self.exchange = kombu.Exchange(self.exchange_name, type='topic', channel=self.channel)
 
         self._buffer = deque()
 
+        self.response_routing_keys = []
+
         kombu.serialization.enable_insecure_serializers()
+
+        self.consumers = [
+            Consumer(self.channel, callbacks=[self.on_message], no_ack=False),
+        ]
+
+        self.queues = []
+
+    def get_consumers(self, Consumer, channel):
+        return self.consumers
 
     def send(self, channel, message):
         assert isinstance(message, dict), "message is not a dict"
@@ -37,7 +55,11 @@ class AMQPChannelLayer(BaseChannelLayer):
             producer.publish(payload, exchange=self.exchange, routing_key=routing_key, delivery_mode=2,
                              content_type='application/msgkpack', content_encoding='binary')
 
-            print("SEND", routing_key)
+            response = None
+            if 'reply_channel' in message:
+                response = message['reply_channel']
+            print("SEND ", routing_key, response)
+            #print("SEND ", routing_key, message)
 
     def receive_many(self, channels, block=False):
         if not channels:
@@ -54,35 +76,52 @@ class AMQPChannelLayer(BaseChannelLayer):
 
         queues = [kombu.Queue(name=self.prefix+'tower'+':{}'.format(rk),
                               exchange=self.exchange, durable=True, exclusive=False,
+                              channel=self.channel,
                               routing_key=rk) for rk in routing_keys]
 
-        with connections[self.connection].acquire(block=True) as connection:
-            with kombu.Consumer(connection, queues=queues, callbacks=[self.on_message]) as consumer:
-                while True:
-                    # check our local buffer for a message
-                    if self._buffer:
-                        # if we've polled a message, ack the message
-                        message = self._buffer.popleft()
-                        channel = message.delivery_info['routing_key']
-                        if channel.count('.') == 2:
-                            channel = channel[::-1].replace('.','!',1)[::-1]
+        for queue in queues:
+            if queue not in self.queues:
+                self.queues.append(queue)
+            else:
+                continue
+            print("adding queue ", queue)
+            queue.maybe_bind(self.channel)
+            self.consumers[0].add_queue(queue)
+            #queue.consume()
+            self.consumers[0].consume()
 
-                        print("CHANNELS", channel, channels)
-                        if channel in channels:
-                            message.ack()
-                            consumer.recover(requeue=True)
-                            return channel, self.deserialize(message.body)
-                        else:
-                            message.requeue()
-                            return None, None
-                    try:
-                        # poll for a message from the consumer
-                        consumer.qos(prefetch_count=1)
-                        connection.drain_events(timeout=1)
-                    except socket.timeout:
-                        return None, None
+        res = (None, None)
+        while True:
+            # check our local buffer for a message
+            if self._buffer:
+                # if we've polled a message, ack the message
+                message = self._buffer.popleft()
+                channel = message.delivery_info['routing_key']
+                if channel.count('.') == 2:
+                    channel = channel[::-1].replace('.','!',1)[::-1]
+
+                print("CHANNELS", channel, channels)
+                if channel in channels:
+                    message.ack()
+                    #consumer.recover(requeue=True)
+                    res = (channel, self.deserialize(message.body))
+                    break 
+                else:
+                    message.requeue()
+                    break
+            try:
+                # poll for a message from the consumer
+                #self.consumers[0].qos(prefetch_count=1)
+                self.connection.drain_events(timeout=1)
+                pass
+
+            except socket.timeout:
+                break
+
+        return res
 
     def on_message(self, body, message):
+        print("on message")
         self._buffer.append(message)
 
     def new_channel(self, pattern):
