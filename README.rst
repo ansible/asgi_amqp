@@ -12,8 +12,8 @@ and other options if you need them.
 
 Example::
 
-    channel_layer = RedisChannelLayer(
-        host="amqp://guest:guest@localhost:5672/%2F",
+    channel_layer = AMQPChannelLayer(
+        url="amqp://guest:guest@localhost:5672//",
         }
     )
 
