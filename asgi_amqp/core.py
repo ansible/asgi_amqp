@@ -22,7 +22,6 @@ class AMQPChannelLayer(BaseChannelLayer):
 
         self.connection = kombu.Connection(self.url)
         self.connection.default_channel.basic_qos(0, 1, False)
-        self.pool = self.connection.ChannelPool(1)
 
         self.channel = self.connection.default_channel
         self.exchange = kombu.Exchange(self.prefix, type='topic', channel=self.channel)
