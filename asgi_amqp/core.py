@@ -8,58 +8,33 @@ import socket
 
 from asgiref.base_layer import BaseChannelLayer
 from collections import deque
-from kombu.pools import (
-    connections,
-    producers,
-)
-from kombu.mixins import ConsumerMixin
-from kombu import Consumer
+from kombu.pools import producers
 
-class AMQPChannelLayer(BaseChannelLayer, ConsumerMixin):
+
+class AMQPChannelLayer(BaseChannelLayer):
     def __init__(self, url=None, prefix='asgi:', expiry=60, group_expiry=86400, capacity=100, channel_capacity=None):
         super(AMQPChannelLayer, self).__init__(expiry, capacity, group_expiry, channel_capacity)
+        kombu.serialization.enable_insecure_serializers()
 
+        self._buffer = deque()
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
-        self.prefix = prefix
-        self.exchange_name = self.prefix + 'tower'
+        self.prefix = prefix + 'tower:{}'.format(socket.gethostname())
 
         self.connection = kombu.Connection(self.url)
         self.connection.default_channel.basic_qos(0, 1, False)
         self.pool = self.connection.ChannelPool(1)
-        #self.channel = self.pool.acquire()
+
         self.channel = self.connection.default_channel
-        
-        self.exchange = kombu.Exchange(self.exchange_name, type='topic', channel=self.channel)
-
-        self._buffer = deque()
-
-        self.response_routing_keys = []
-
-        kombu.serialization.enable_insecure_serializers()
-
-        self.consumers = [
-            Consumer(self.channel, callbacks=[self.on_message], no_ack=False),
-        ]
-
-        self.queues = []
-
-    def get_consumers(self, Consumer, channel):
-        return self.consumers
+        self.exchange = kombu.Exchange(self.prefix, type='topic', channel=self.channel)
 
     def send(self, channel, message):
         assert isinstance(message, dict), "message is not a dict"
         assert self.valid_channel_name(channel), "Channel name not valid"
         with producers[self.connection].acquire(block=True) as producer:
-            routing_key = channel.replace('!','.',1)
+            routing_key = channel_to_routing_key(channel)
             payload = self.serialize(message)
-            producer.publish(payload, exchange=self.exchange, routing_key=routing_key, delivery_mode=2,
+            producer.publish(payload, exchange=self.exchange, routing_key=routing_key, delivery_mode=1,
                              content_type='application/msgkpack', content_encoding='binary')
-
-            response = None
-            if 'reply_channel' in message:
-                response = message['reply_channel']
-            print("SEND ", routing_key, response)
-            #print("SEND ", routing_key, message)
 
     def receive_many(self, channels, block=False):
         if not channels:
@@ -67,61 +42,33 @@ class AMQPChannelLayer(BaseChannelLayer, ConsumerMixin):
 
         # bind this queue to messages sent to any of the routing_keys
         # in the channels set.
-        routing_keys = set()
-        for channel in channels:
-            routing_key = channel.split('!')[0]
-            if '!' in channel:
-                routing_key += ".*"
-            routing_keys.add(routing_key)
-
-        queues = [kombu.Queue(name=self.prefix+'tower'+':{}'.format(rk),
+        routing_keys = routing_keys_from_channels(channels)
+        queues = [kombu.Queue(name=self.prefix+':{}'.format(rk),
                               exchange=self.exchange, durable=True, exclusive=False,
                               channel=self.channel,
                               routing_key=rk) for rk in routing_keys]
+        consumer = kombu.Consumer(self.channel, queues, callbacks=[self.on_message], no_ack=False)
+        consumer.consume()
 
-        for queue in queues:
-            if queue not in self.queues:
-                self.queues.append(queue)
-            else:
-                continue
-            print("adding queue ", queue)
-            queue.maybe_bind(self.channel)
-            self.consumers[0].add_queue(queue)
-            #queue.consume()
-            self.consumers[0].consume()
-
-        res = (None, None)
         while True:
-            # check our local buffer for a message
+            # check local buffer for messages
             if self._buffer:
-                # if we've polled a message, ack the message
                 message = self._buffer.popleft()
-                channel = message.delivery_info['routing_key']
-                if channel.count('.') == 2:
-                    channel = channel[::-1].replace('.','!',1)[::-1]
-
-                print("CHANNELS", channel, channels)
+                channel = routing_key_to_channel(message.delivery_info['routing_key'])
                 if channel in channels:
+                    # ack the local message and return it to be handled by channels
                     message.ack()
-                    #consumer.recover(requeue=True)
-                    res = (channel, self.deserialize(message.body))
-                    break 
+                    return channel, self.deserialize(message.body)
                 else:
                     message.requeue()
                     break
             try:
-                # poll for a message from the consumer
-                #self.consumers[0].qos(prefetch_count=1)
                 self.connection.drain_events(timeout=1)
-                pass
-
             except socket.timeout:
                 break
-
-        return res
+        return None, None
 
     def on_message(self, body, message):
-        print("on message")
         self._buffer.append(message)
 
     def new_channel(self, pattern):
@@ -145,3 +92,23 @@ class AMQPChannelLayer(BaseChannelLayer, ConsumerMixin):
 
     def __str__(self):
         return "%s(host=%s)" % (self.__class__.__name__, self.host)
+
+
+def routing_key_to_channel(routing_key):
+    if routing_key.count('.') == 2:
+        routing_key = routing_key[::-1].replace('.', '!', 1)[::-1]
+    return routing_key
+
+
+def channel_to_routing_key(channel):
+    return channel.replace('!', '.', 1)
+
+
+def routing_keys_from_channels(channels):
+    routing_keys = set()
+    for channel in channels:
+        routing_key = channel.split('!')[0]
+        if '!' in channel:
+            routing_key += ".*"
+        routing_keys.add(routing_key)
+    return routing_keys
