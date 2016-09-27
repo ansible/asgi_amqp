@@ -21,11 +21,8 @@ setup(
     include_package_data=True,
     install_requires=[
         'six',
-        'pika>=0.10.0',
+        'kombu==3.0.35',
         'msgpack-python',
         'asgiref>=0.14.0',
     ],
-    extras_requires={
-        "cryptography": ['cryptography>=1.3.0'],
-    }
 )
