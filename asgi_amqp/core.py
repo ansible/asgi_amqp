@@ -23,9 +23,8 @@ class AMQPChannelLayer(BaseChannelLayer):
         self.connection = kombu.Connection(self.url)
         self.connection.default_channel.basic_qos(0, 1, False)
 
-        self.channel = self.connection.default_channel
-        self.exchange = kombu.Exchange(self.prefix, type='topic', channel=self.channel)
-        self.consumer = kombu.Consumer(self.channel, [], callbacks=[self.on_message], no_ack=False)
+        self.pool = self.connection.ChannelPool(100)
+        self.exchange = kombu.Exchange(self.prefix, type='topic')
 
     def send(self, channel, message):
         assert isinstance(message, dict), "message is not a dict"
@@ -42,12 +41,15 @@ class AMQPChannelLayer(BaseChannelLayer):
 
         # bind this queue to messages sent to any of the routing_keys
         # in the channels set.
+        amqp_channel = self.pool.acquire()
+
         routing_keys = routing_keys_from_channels(channels)
-        self.consumer.queues = [kombu.Queue(name=self.prefix+':{}'.format(rk),
-                                            exchange=self.exchange, durable=True, exclusive=False,
-                                            channel=self.channel,
-                                            routing_key=rk) for rk in routing_keys]
-        self.consumer.consume()
+        queues = [kombu.Queue(name=self.prefix+':{}'.format(rk),
+                              exchange=self.exchange, durable=True, exclusive=False,
+                              channel=amqp_channel,
+                              routing_key=rk) for rk in routing_keys]
+        consumer = kombu.Consumer(amqp_channel, queues, callbacks=[self.on_message], no_ack=False)
+        consumer.consume()
 
         while True:
             # check local buffer for messages
@@ -55,12 +57,14 @@ class AMQPChannelLayer(BaseChannelLayer):
                 message = self._buffer.popleft()
                 channel = routing_key_to_channel(message.delivery_info['routing_key'])
                 message.ack()
+                amqp_channel.release()
                 return channel, self.deserialize(message.body)
             try:
                 self.connection.drain_events(timeout=1)
             except socket.timeout:
                 break
 
+        amqp_channel.release()
         return None, None
 
     def on_message(self, body, message):
