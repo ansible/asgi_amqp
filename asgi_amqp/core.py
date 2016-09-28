@@ -5,6 +5,7 @@ import six
 import uuid
 import msgpack
 import socket
+import threading
 
 from asgiref.base_layer import BaseChannelLayer
 from collections import deque
@@ -16,20 +17,29 @@ class AMQPChannelLayer(BaseChannelLayer):
         super(AMQPChannelLayer, self).__init__(expiry, capacity, group_expiry, channel_capacity)
         kombu.serialization.enable_insecure_serializers()
 
-        self._buffer = deque()
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
         self.prefix = prefix + 'tower:{}'.format(socket.gethostname())
-
-        self.connection = kombu.Connection(self.url)
-        self.connection.default_channel.basic_qos(0, 1, False)
-
-        self.pool = self.connection.ChannelPool(100)
         self.exchange = kombu.Exchange(self.prefix, type='topic')
+        self.tdata = threading.local()
+
+    def _init_thread(self):
+        if not hasattr(self.tdata, 'connection'):
+            self.tdata.connection = kombu.Connection(self.url)
+            self.tdata.connection.default_channel.basic_qos(0, 1, False)
+            self.tdata.consumer = self.tdata.connection.Consumer([], callbacks=[self.on_message], no_ack=False)
+
+        if not hasattr(self.tdata, 'buffer'):
+            self.tdata.buffer = deque()
+
+        if not hasattr(self.tdata, 'routing_keys'):
+            self.tdata.routing_keys = set()
 
     def send(self, channel, message):
+        self._init_thread()
+
         assert isinstance(message, dict), "message is not a dict"
         assert self.valid_channel_name(channel), "Channel name not valid"
-        with producers[self.connection].acquire(block=True) as producer:
+        with producers[self.tdata.connection].acquire(block=True) as producer:
             routing_key = channel_to_routing_key(channel)
             payload = self.serialize(message)
             producer.publish(payload, exchange=self.exchange, routing_key=routing_key, delivery_mode=1,
@@ -39,36 +49,37 @@ class AMQPChannelLayer(BaseChannelLayer):
         if not channels:
             return None, None
 
+        self._init_thread()
+
         # bind this queue to messages sent to any of the routing_keys
         # in the channels set.
-        amqp_channel = self.pool.acquire()
+        incoming_routing_keys = routing_keys_from_channels(channels)
+        new_routing_keys = set(incoming_routing_keys).difference(self.tdata.routing_keys)
+        self.tdata.routing_keys = new_routing_keys.union(self.tdata.routing_keys)
 
-        routing_keys = routing_keys_from_channels(channels)
-        queues = [kombu.Queue(name=self.prefix+':{}'.format(rk),
-                              exchange=self.exchange, durable=True, exclusive=False,
-                              channel=amqp_channel,
-                              routing_key=rk) for rk in routing_keys]
-        consumer = kombu.Consumer(amqp_channel, queues, callbacks=[self.on_message], no_ack=False)
-        consumer.consume()
+        for nrk in new_routing_keys:
+            queue = kombu.Queue(name=self.prefix+':{}'.format(nrk),
+                                exchange=self.exchange, durable=True, exclusive=False,
+                                routing_key=nrk)
+            self.tdata.consumer.add_queue(queue)
+        self.tdata.consumer.consume()
 
         while True:
             # check local buffer for messages
-            if self._buffer:
-                message = self._buffer.popleft()
+            if self.tdata.buffer:
+                message = self.tdata.buffer.popleft()
                 channel = routing_key_to_channel(message.delivery_info['routing_key'])
                 message.ack()
-                amqp_channel.release()
                 return channel, self.deserialize(message.body)
             try:
-                self.connection.drain_events(timeout=1)
+                self.tdata.connection.drain_events(timeout=1)
             except socket.timeout:
                 break
 
-        amqp_channel.release()
         return None, None
 
     def on_message(self, body, message):
-        self._buffer.append(message)
+        self.tdata.buffer.append(message)
 
     def new_channel(self, pattern):
         assert isinstance(pattern, six.text_type)
