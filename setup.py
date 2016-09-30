@@ -22,7 +22,7 @@ setup(
     install_requires=[
         'six',
         'kombu==3.0.35',
-        'msgpack-python==0.4.8',
+        'msgpack-python==0.4.7',
         'asgiref>=0.14.0',
         'jsonpickle==0.9.3',
     ],
