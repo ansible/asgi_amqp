@@ -1,7 +1,7 @@
 import os
 from setuptools import setup, find_packages
 
-__version__ = '0.1'
+__version__ = '0.2'
 
 # We use the README as the long_description
 readme_path = os.path.join(os.path.dirname(__file__), "README.rst")
@@ -22,7 +22,8 @@ setup(
     install_requires=[
         'six',
         'kombu==3.0.35',
-        'msgpack-python',
+        'msgpack-python==0.4.8',
         'asgiref>=0.14.0',
+        'jsonpickle==0.9.3',
     ],
 )
