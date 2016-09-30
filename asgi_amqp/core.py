@@ -6,10 +6,69 @@ import uuid
 import msgpack
 import socket
 import threading
+import datetime
+import jsonpickle
 
 from asgiref.base_layer import BaseChannelLayer
-from collections import deque
+from collections import (
+    deque,
+    defaultdict,
+)
 from kombu.pools import producers
+
+
+class Group(object):
+    def __init__(self, expiry=86400):
+        self.expiry = expiry
+        self.members = {}
+
+    def add(self, member, ts=None):
+        self.members[member] = ts or datetime.datetime.utcnow()
+
+    def remove(self, member):
+        if member in self.members:
+            del self.members[member]
+
+    def channels(self):
+        self.expire()
+        return self.members.keys()
+
+    def expire(self, expiry=None):
+        exp = expiry or self.expiry
+        for k, v in self.members.items():
+            now = datetime.datetime.now()
+            if (now - v).total_seconds() > exp:
+                del self.members[k]
+
+
+def group_factory():
+    return Group()
+
+
+def update_groups(func):
+    def wrapper(channel_layer, *args, **kwargs):
+        channel = channel_layer.tdata.connection.channel()
+        group_queue_id = 'group-' + str(uuid.uuid4())
+        queue = kombu.Queue(name=channel_layer.prefix + ':{}'.format(group_queue_id), exchange=channel_layer.group_exchange,
+                            channel=channel, no_ack=True, durable=False, exclusive=True)
+        queue.queue_declare()
+        message = queue.get(no_ack=True)
+        if message:
+            message = channel_layer.deserialize(message)
+            groups = jsonpickle.decode(message)
+            channel_layer.groups.update(groups)
+        queue.delete(if_empty=True)
+        channel.close()
+
+        with producers[channel_layer.tdata.connection].acquire(block=True) as producer:
+            groups = jsonpickle.encode(channel_layer.groups)
+            payload = channel_layer.serialize(groups)
+            producer.maybe_declare(channel_layer.group_exchange)
+            producer.publish(payload, exchange=channel_layer.group_exchange, delivery_mode=1,
+                            content_type='application/msgpack', content_encoding='binary')
+
+        return func(channel_layer, *args, **kwargs)
+    return wrapper
 
 
 class AMQPChannelLayer(BaseChannelLayer):
@@ -20,6 +79,10 @@ class AMQPChannelLayer(BaseChannelLayer):
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
         self.prefix = prefix + 'tower:{}'.format(socket.gethostname())
         self.exchange = kombu.Exchange(self.prefix, type='topic')
+
+        self.groups = defaultdict(group_factory)
+        self.group_exchange = kombu.Exchange('asgi:tower:groups', type='x-lvc')
+
         self.tdata = threading.local()
 
     def _init_thread(self):
@@ -87,17 +150,32 @@ class AMQPChannelLayer(BaseChannelLayer):
         new_name = pattern + str(uuid.uuid4())
         return new_name
 
+    @update_groups
+    def group_add(self, group, channel):
+        g = self.groups[group]
+        g.add(channel)
+
+    @update_groups
+    def group_discard(self, group, channel):
+        g = self.groups[group]
+        g.remove(channel)
+
+    def group_channels(self, group):
+        g = self.groups[group]
+        g.expire()
+        return g.channels()
+
+    def send_group(self, group, message):
+        for channel in self.group_channels(group):
+            self.send(channel, message)
+
     def serialize(self, message):
-        """
-        Serializes message to a byte string.
-        """
+        """Serializes message to a byte string."""
         value = msgpack.packb(message, use_bin_type=True)
         return value
 
     def deserialize(self, message):
-        """
-        Deserializes from a byte string.
-        """
+        """Deserializes from a byte string."""
         return msgpack.unpackb(message, encoding="utf8")
 
     def __str__(self):
