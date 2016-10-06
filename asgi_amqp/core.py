@@ -10,78 +10,29 @@ import datetime
 import jsonpickle
 
 from asgiref.base_layer import BaseChannelLayer
-from collections import (
-    deque,
-    defaultdict,
-)
+from collections import deque
 from kombu.pools import producers
 
+import awx
+awx.prepare_env()
 
-class Group(object):
-    def __init__(self, expiry=86400):
-        self.expiry = expiry
-        self.members = {}
-
-    def add(self, member, ts=None):
-        self.members[member] = ts or datetime.datetime.utcnow()
-
-    def remove(self, member):
-        if member in self.members:
-            del self.members[member]
-
-    def channels(self):
-        self.expire()
-        return self.members.keys()
-
-    def expire(self, expiry=None):
-        exp = expiry or self.expiry
-        for k, v in self.members.items():
-            now = datetime.datetime.now()
-            if (now - v).total_seconds() > exp:
-                del self.members[k]
-
-
-def group_factory():
-    return Group()
-
-
-def update_groups(func):
-    def wrapper(channel_layer, *args, **kwargs):
-        channel = channel_layer.tdata.connection.channel()
-        group_queue_id = 'group-' + str(uuid.uuid4())
-        queue = kombu.Queue(name=channel_layer.prefix + ':{}'.format(group_queue_id), exchange=channel_layer.group_exchange,
-                            channel=channel, no_ack=True, durable=False, exclusive=True)
-        queue.queue_declare()
-        message = queue.get(no_ack=True)
-        if message:
-            message = channel_layer.deserialize(message)
-            groups = jsonpickle.decode(message)
-            channel_layer.groups.update(groups)
-        queue.delete(if_empty=True)
-        channel.close()
-
-        with producers[channel_layer.tdata.connection].acquire(block=True) as producer:
-            groups = jsonpickle.encode(channel_layer.groups)
-            payload = channel_layer.serialize(groups)
-            producer.maybe_declare(channel_layer.group_exchange)
-            producer.publish(payload, exchange=channel_layer.group_exchange, delivery_mode=1,
-                            content_type='application/msgpack', content_encoding='binary')
-
-        return func(channel_layer, *args, **kwargs)
-    return wrapper
+from awx.main.models import ChannelGroup
 
 
 class AMQPChannelLayer(BaseChannelLayer):
     def __init__(self, url=None, prefix='asgi:', expiry=60, group_expiry=86400, capacity=100, channel_capacity=None):
-        super(AMQPChannelLayer, self).__init__(expiry, capacity, group_expiry, channel_capacity)
+        super(AMQPChannelLayer, self).__init__(
+            expiry=expiry,
+            group_expiry=group_expiry,
+            capacity=capacity,
+            channel_capacity=channel_capacity,
+        )
+
         kombu.serialization.enable_insecure_serializers()
 
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
         self.prefix = prefix + 'tower:{}'.format(socket.gethostname())
         self.exchange = kombu.Exchange(self.prefix, type='topic')
-
-        self.groups = defaultdict(group_factory)
-        self.group_exchange = kombu.Exchange('asgi:tower:groups', type='x-lvc')
 
         self.tdata = threading.local()
 
@@ -101,7 +52,8 @@ class AMQPChannelLayer(BaseChannelLayer):
         self._init_thread()
 
         assert isinstance(message, dict), "message is not a dict"
-        assert self.valid_channel_name(channel), "Channel name not valid"
+        assert self.valid_channel_name(channel)
+
         with producers[self.tdata.connection].acquire(block=True) as producer:
             routing_key = channel_to_routing_key(channel)
             payload = self.serialize(message)
@@ -150,20 +102,45 @@ class AMQPChannelLayer(BaseChannelLayer):
         new_name = pattern + str(uuid.uuid4())
         return new_name
 
-    @update_groups
     def group_add(self, group, channel):
-        g = self.groups[group]
-        g.add(channel)
+        g, created = ChannelGroup.objects.get_or_create(group=group)
+        ts = datetime.datetime.utcnow()
 
-    @update_groups
+        if created:
+            channels = {channel: ts}
+        else:
+            channels = jsonpickle.decode(g.channels)
+            channels.update({channel: ts})
+
+        for c, ts in channels.items():
+            now = datetime.datetime.utcnow()
+            if (now - ts).total_seconds() > self.group_expiry:
+                del channels[c]
+
+        g.channels = jsonpickle.encode(channels)
+        g.save()
+
     def group_discard(self, group, channel):
-        g = self.groups[group]
-        g.remove(channel)
+        try:
+            g = ChannelGroup.objects.get(group=group)
+        except ChannelGroup.DoesNotExist:
+            return None
+
+        channels = jsonpickle.decode(g.channels)
+        if channel in channels:
+            del channels[channel]
+
+        g.channels = jsonpickle.encode(channels)
+        g.save()
 
     def group_channels(self, group):
-        g = self.groups[group]
-        g.expire()
-        return g.channels()
+        try:
+            g = ChannelGroup.objects.get(group=group)
+        except ChannelGroup.DoesNotExist:
+            return {}
+
+        channels = jsonpickle.decode(g.channels)
+        return channels.keys()
 
     def send_group(self, group, message):
         for channel in self.group_channels(group):
