@@ -31,7 +31,7 @@ class AMQPChannelLayer(BaseChannelLayer):
         kombu.serialization.enable_insecure_serializers()
 
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
-        self.prefix = prefix + 'tower:{}'.format(socket.gethostname())
+        self.prefix = prefix + 'tower:websocket'
         self.exchange = kombu.Exchange(self.prefix, type='topic')
 
         self.tdata = threading.local()
