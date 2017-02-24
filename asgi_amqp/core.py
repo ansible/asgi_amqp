@@ -68,14 +68,14 @@ class AMQPChannelLayer(BaseChannelLayer):
 
         # bind this queue to messages sent to any of the routing_keys
         # in the channels set.
-        incoming_routing_keys = routing_keys_from_channels(channels)
+        incoming_routing_keys = [channel_to_routing_key(channel) for channel in channels]
         new_routing_keys = set(incoming_routing_keys).difference(self.tdata.routing_keys)
         self.tdata.routing_keys = new_routing_keys.union(self.tdata.routing_keys)
 
         for nrk in new_routing_keys:
             queue = kombu.Queue(name=self.prefix+':{}'.format(nrk),
-                                exchange=self.exchange, durable=True, exclusive=False,
-                                routing_key=nrk)
+                                exchange=self.exchange, durable=False, exclusive=False,
+                                auto_delete=True, routing_key=nrk)
             self.tdata.consumer.add_queue(queue)
         self.tdata.consumer.consume()
 
