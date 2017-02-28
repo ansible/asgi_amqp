@@ -16,6 +16,7 @@ from kombu.pools import producers
 import awx
 awx.prepare_env()
 
+from django.db import transaction
 from awx.main.models import ChannelGroup
 
 
@@ -103,35 +104,37 @@ class AMQPChannelLayer(BaseChannelLayer):
         return new_name
 
     def group_add(self, group, channel):
-        g, created = ChannelGroup.objects.get_or_create(group=group)
-        ts = datetime.datetime.utcnow()
+        with transaction.atomic():
+            g, created = ChannelGroup.objects.select_for_update().get_or_create(group=group)
+            ts = datetime.datetime.utcnow()
 
-        if created:
-            channels = {channel: ts}
-        else:
-            channels = jsonpickle.decode(g.channels)
-            channels.update({channel: ts})
+            if created:
+                channels = {channel: ts}
+            else:
+                channels = jsonpickle.decode(g.channels)
+                channels.update({channel: ts})
 
-        for c, ts in channels.items():
-            now = datetime.datetime.utcnow()
-            if (now - ts).total_seconds() > self.group_expiry:
-                del channels[c]
+            for c, ts in channels.items():
+                now = datetime.datetime.utcnow()
+                if (now - ts).total_seconds() > self.group_expiry:
+                    del channels[c]
 
-        g.channels = jsonpickle.encode(channels)
-        g.save()
+            g.channels = jsonpickle.encode(channels)
+            g.save()
 
     def group_discard(self, group, channel):
-        try:
-            g = ChannelGroup.objects.get(group=group)
-        except ChannelGroup.DoesNotExist:
-            return None
+        with transaction.atomic():
+            try:
+                g = ChannelGroup.objects.select_for_update().get(group=group)
+            except ChannelGroup.DoesNotExist:
+                return None
 
-        channels = jsonpickle.decode(g.channels)
-        if channel in channels:
-            del channels[channel]
+            channels = jsonpickle.decode(g.channels)
+            if channel in channels:
+                del channels[channel]
 
-        g.channels = jsonpickle.encode(channels)
-        g.save()
+            g.channels = jsonpickle.encode(channels)
+            g.save()
 
     def group_channels(self, group):
         try:
@@ -167,13 +170,3 @@ def routing_key_to_channel(routing_key):
 
 def channel_to_routing_key(channel):
     return channel.replace('!', '.', 1)
-
-
-def routing_keys_from_channels(channels):
-    routing_keys = set()
-    for channel in channels:
-        routing_key = channel.split('!')[0]
-        if '!' in channel:
-            routing_key += ".*"
-        routing_keys.add(routing_key)
-    return routing_keys
