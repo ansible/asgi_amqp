@@ -1,3 +1,6 @@
+# Copyright (c) 2017 Ansible by Red Hat
+#  All Rights Reserved.
+
 from __future__ import unicode_literals
 
 import kombu
