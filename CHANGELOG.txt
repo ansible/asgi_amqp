@@ -1,3 +1,8 @@
+0.4.2 (2017-03-29)
+------------------
+* Update LICENSE and Copyright
+* tox / setup / testing updates.
+
 0.3.2 (2016-11-18)
 ------------------
 * Relax strict package dependencies
