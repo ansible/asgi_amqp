@@ -28,7 +28,7 @@ setup(
         'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3.6',
     ],
-    keywords='asgi_amqp asgi amqp rabbitmq django channels'
+    keywords='asgi_amqp asgi amqp rabbitmq django channels',
     license='BSD',
     zip_safe=False,
     packages=find_packages(),
@@ -40,4 +40,5 @@ setup(
         'asgiref>=0.14.0',
         'jsonpickle>=0.9.3',
     ],
+    tests_require=['pytest'],
 )

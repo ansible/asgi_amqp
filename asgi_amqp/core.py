@@ -17,10 +17,11 @@ from collections import deque
 from kombu.pools import producers
 
 import awx
-awx.prepare_env()
-
 from django.db import transaction
 from awx.main.models import ChannelGroup
+
+
+awx.prepare_env()
 
 
 class AMQPChannelLayer(BaseChannelLayer):
