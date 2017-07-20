@@ -1,6 +1,9 @@
 asgi_amqp
 ==========
 
+You should probably use [asgi_rabbitmq](http://asgi-rabbitmq.readthedocs.io/en/latest/index.html)
+----------
+
 Not intended for public consumption. Currently depends on closed source libraries.
 
 An ASGI channel layer that uses AMQP as its backing store with group support.
