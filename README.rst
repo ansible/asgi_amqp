@@ -1,7 +1,7 @@
 asgi_amqp
 ==========
 
-You should probably use [asgi_rabbitmq](http://asgi-rabbitmq.readthedocs.io/en/latest/index.html)
+You should probably use `asgi_rabbitmq <http://asgi-rabbitmq.readthedocs.io/en/latest/index.html>`_
 ----------
 
 Not intended for public consumption. Currently depends on closed source libraries.
