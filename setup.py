@@ -1,7 +1,7 @@
 import os
 from setuptools import setup, find_packages
 
-__version__ = '0.4.2'
+__version__ = '1.0.0'
 
 # We use the README as the long_description
 readme_path = os.path.join(os.path.dirname(__file__), "README.rst")
@@ -37,7 +37,7 @@ setup(
         'six',
         'kombu>=3.0.35',
         'msgpack-python>=0.4.7',
-        'asgiref>=0.14.0',
+        'asgiref==1.1.2',
         'jsonpickle>=0.9.3',
     ],
     tests_require=['pytest'],

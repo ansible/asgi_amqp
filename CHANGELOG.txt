@@ -1,7 +1,13 @@
+1.0.0 (2017-11-27)
+-----------------
+* Fix send/receive with channels 1.0.0+
+
+
 0.4.2 (2017-03-29)
 ------------------
 * Update LICENSE and Copyright
 * tox / setup / testing updates.
+
 
 0.3.2 (2016-11-18)
 ------------------
@@ -10,5 +16,4 @@
 
 0.1.0 (2016-09-02)
 ------------------
-
 * First release

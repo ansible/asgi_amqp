@@ -33,8 +33,6 @@ class AMQPChannelLayer(BaseChannelLayer):
             channel_capacity=channel_capacity,
         )
 
-        kombu.serialization.enable_insecure_serializers()
-
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
         self.prefix = prefix + 'tower:websocket'
         self.exchange = kombu.Exchange(self.prefix, type='topic')
@@ -45,7 +43,9 @@ class AMQPChannelLayer(BaseChannelLayer):
         if not hasattr(self.tdata, 'connection'):
             self.tdata.connection = kombu.Connection(self.url)
             self.tdata.connection.default_channel.basic_qos(0, 1, False)
-            self.tdata.consumer = self.tdata.connection.Consumer([], callbacks=[self.on_message], no_ack=False)
+            self.tdata.consumer = self.tdata.connection.Consumer([], callbacks=[self.on_message],
+                                                                 accept=['msgpack', 'application/msgpack'],
+                                                                 no_ack=False)
 
         if not hasattr(self.tdata, 'buffer'):
             self.tdata.buffer = deque()
@@ -63,9 +63,9 @@ class AMQPChannelLayer(BaseChannelLayer):
             routing_key = channel_to_routing_key(channel)
             payload = self.serialize(message)
             producer.publish(payload, exchange=self.exchange, routing_key=routing_key, delivery_mode=1,
-                             content_type='application/msgkpack', content_encoding='binary')
+                             content_type='application/msgpack', content_encoding='binary')
 
-    def receive_many(self, channels, block=False):
+    def receive(self, channels, block=False):
         if not channels:
             return None, None
 
@@ -78,6 +78,8 @@ class AMQPChannelLayer(BaseChannelLayer):
         self.tdata.routing_keys = new_routing_keys.union(self.tdata.routing_keys)
 
         for nrk in new_routing_keys:
+            if nrk.endswith('.'):
+                nrk += '*'
             queue = kombu.Queue(name=self.prefix+':{}'.format(nrk),
                                 exchange=self.exchange, durable=False, exclusive=False,
                                 auto_delete=True, routing_key=nrk)
@@ -167,7 +169,7 @@ class AMQPChannelLayer(BaseChannelLayer):
 
 
 def routing_key_to_channel(routing_key):
-    if routing_key.count('.') == 2:
+    if routing_key.count('.') == 3:
         routing_key = routing_key[::-1].replace('.', '!', 1)[::-1]
     return routing_key
 
