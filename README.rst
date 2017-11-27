@@ -1,11 +1,6 @@
 asgi_amqp
 ==========
 
-You should probably use `asgi_rabbitmq <http://asgi-rabbitmq.readthedocs.io/en/latest/index.html>`_
-----------
-
-Not intended for public consumption. Currently depends on closed source libraries.
-
 An ASGI channel layer that uses AMQP as its backing store with group support.
 
 *IMPORTANT*
@@ -14,6 +9,8 @@ An ASGI channel layer that uses AMQP as its backing store with group support.
 This library expects your Django project to have a model called ChannelGroup.
 You will need to fix the import of `ChannelGroup` in the code to make it work
 with your django project.
+
+See an example here: https://github.com/ansible/awx/blob/devel/awx/main/models/channels.py
 
 Eventually I make this part of the configuration options so you can just pass
 in `project.model.MyModel` in your `settings.py` file.
