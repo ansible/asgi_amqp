@@ -53,17 +53,28 @@ class AMQPChannelLayer(BaseChannelLayer):
         if not hasattr(self.tdata, 'routing_keys'):
             self.tdata.routing_keys = set()
 
+    def recover(self):
+        self.tdata.connection.ensure_connection(max_retries=5)
+        self.tdata.consumer.revive(self.tdata.connection.channel())
+
     def send(self, channel, message):
         self._init_thread()
 
         assert isinstance(message, dict), "message is not a dict"
         assert self.valid_channel_name(channel)
 
-        with producers[self.tdata.connection].acquire(block=True) as producer:
-            routing_key = channel_to_routing_key(channel)
-            payload = self.serialize(message)
-            producer.publish(payload, exchange=self.exchange, routing_key=routing_key, delivery_mode=1,
-                             content_type='application/msgpack', content_encoding='binary')
+        def do_send():
+            with producers[self.tdata.connection].acquire(block=True) as producer:
+                routing_key = channel_to_routing_key(channel)
+                payload = self.serialize(message)
+                producer.publish(payload, exchange=self.exchange, routing_key=routing_key, delivery_mode=1,
+                                 content_type='application/msgpack', content_encoding='binary')
+
+        try:
+            do_send()
+        except self.tdata.connection.recoverable_connection_errors:
+            self.recover()
+            do_send()
 
     def receive(self, channels, block=False):
         if not channels:
@@ -99,8 +110,7 @@ class AMQPChannelLayer(BaseChannelLayer):
             except socket.timeout:
                 break
             except self.tdata.connection.recoverable_connection_errors:
-                self.tdata.connection.ensure_connection(max_retries=5)
-                self.tdata.consumer.revive(self.tdata.connection.channel())
+                self.recover()
                 self.tdata.consumer.consume()
 
         return None, None
