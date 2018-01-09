@@ -93,10 +93,15 @@ class AMQPChannelLayer(BaseChannelLayer):
                 channel = routing_key_to_channel(message.delivery_info['routing_key'])
                 message.ack()
                 return channel, self.deserialize(message.body)
+
             try:
                 self.tdata.connection.drain_events(timeout=1)
             except socket.timeout:
                 break
+            except self.tdata.connection.recoverable_connection_errors:
+                self.tdata.connection.ensure_connection(max_retries=5)
+                self.tdata.consumer.revive(self.tdata.connection.channel())
+                self.tdata.consumer.consume()
 
         return None, None
 
