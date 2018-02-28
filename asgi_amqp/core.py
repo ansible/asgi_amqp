@@ -16,16 +16,30 @@ from asgiref.base_layer import BaseChannelLayer
 from collections import deque
 from kombu.pools import producers
 
-import awx
 from django.db import transaction
-from awx.main.models import ChannelGroup
-
-
-awx.prepare_env()
+from django.conf import settings
+from django.utils.module_loading import import_string
 
 
 class AMQPChannelLayer(BaseChannelLayer):
     def __init__(self, url=None, prefix='asgi:', expiry=60, group_expiry=86400, capacity=100, channel_capacity=None):
+
+        try:
+            init_func = import_string(self.config["INIT_FUNC"])
+            init_func()
+        except KeyError:
+            pass
+        except ImportError:
+            raise RuntimeError("Cannot import INIT_FUNC")
+
+        try:
+            self.model = import_string(self.config["MODEL"])
+        except KeyError:
+            from .models import ChannelGroup
+            self.model = ChannelGroup
+        except ImportError:
+            raise RuntimeError("Cannot import MODEL")
+
         super(AMQPChannelLayer, self).__init__(
             expiry=expiry,
             group_expiry=group_expiry,
@@ -38,6 +52,10 @@ class AMQPChannelLayer(BaseChannelLayer):
         self.exchange = kombu.Exchange(self.prefix, type='topic')
 
         self.tdata = threading.local()
+
+    @property
+    def config(self):
+        return getattr(settings, "ASGI_AMQP", {})
 
     def _init_thread(self):
         if not hasattr(self.tdata, 'connection'):
@@ -126,7 +144,7 @@ class AMQPChannelLayer(BaseChannelLayer):
 
     def group_add(self, group, channel):
         with transaction.atomic():
-            g, created = ChannelGroup.objects.select_for_update().get_or_create(group=group)
+            g, created = self.model.objects.select_for_update().get_or_create(group=group)
             ts = datetime.datetime.utcnow()
 
             if created:
@@ -146,8 +164,8 @@ class AMQPChannelLayer(BaseChannelLayer):
     def group_discard(self, group, channel):
         with transaction.atomic():
             try:
-                g = ChannelGroup.objects.select_for_update().get(group=group)
-            except ChannelGroup.DoesNotExist:
+                g = self.model.objects.select_for_update().get(group=group)
+            except self.model.DoesNotExist:
                 return None
 
             channels = jsonpickle.decode(g.channels)
@@ -159,8 +177,8 @@ class AMQPChannelLayer(BaseChannelLayer):
 
     def group_channels(self, group):
         try:
-            g = ChannelGroup.objects.get(group=group)
-        except ChannelGroup.DoesNotExist:
+            g = self.model.objects.get(group=group)
+        except self.model.DoesNotExist:
             return {}
 
         channels = jsonpickle.decode(g.channels)

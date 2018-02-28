@@ -3,42 +3,47 @@ asgi_amqp
 
 An ASGI channel layer that uses AMQP as its backing store with group support.
 
-*IMPORTANT*
------------
+Settings
+--------
 
-This library expects your Django project to have a model called ChannelGroup.
-You will need to fix the import of `ChannelGroup` in the code to make it work
-with your django project.
+The `asgi_amqp` channel layer looks for settings in `ASGI_AMQP` and
+has the following configuration options. URL and connection settings
+are configured through `CHANNEL_LAYER` same as any channel layer.
 
-See an example here: https://github.com/ansible/awx/blob/devel/awx/main/models/channels.py
+**MODEL**
+Set a custom `ChannelGroup` model to use. See more about this in the ChannelGroup
+Model section of this README.
 
-Eventually I make this part of the configuration options so you can just pass
-in `project.model.MyModel` in your `settings.py` file.
+Usage::
+
+    ASGI_AMQP = {'MODEL': 'awx.main.models.channels.ChannelGroup'}
+
+**INIT_FUNC**
+A function that you want run when the channel layer is first instantiated.
+
+Usage::
+
+    ASGI_AMQP = {'INIT_FUNC': 'awx.prepare_env'}
 
 
-Example Model::
+ChannelGroup Model
+------------------
 
-    from django.db import models
+This channel layer requires a database model called `ChannelGroup`. You
+can use the model and migation provided by adding `asgi_amqp` to your
+installed apps or you can point the `ASGI_AMQP.MODEL` setting to a
+model you have already defined.
 
-    class ChannelGroup(models.Model):
-        group = models.CharField(max_length=200, unique=True)
-        channels = models.TextField()
+Installed Apps::
 
+    INSTALLED_APPS = [
+        ...
+        'asgi_amqp',
+        ...
+    ]
 
-Usage
------
+Settings::
 
-You'll need to instantiate the channel layer with at least ``url``,
-and other options if you need them.
-
-Example::
-
-    channel_layer = AMQPChannelLayer(
-        url="amqp://guest:guest@localhost:5672//",
-        }
-    )
-
-host
-~~~~
-
-The server to connect to as a URL.
+    ASGI_AMQP = {
+        'MODEL': 'awx.main.models.channels.ChannelGroup',
+    }
