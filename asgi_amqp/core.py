@@ -61,10 +61,10 @@ class AMQPChannelLayer(BaseChannelLayer):
         if not hasattr(self.tdata, 'connection'):
             self.tdata.connection = kombu.Connection(self.url)
             self.tdata.connection.default_channel.basic_qos(0, 1, False)
+        if not hasattr(self.tdata, 'consumer'):
             self.tdata.consumer = self.tdata.connection.Consumer([], callbacks=[self.on_message],
                                                                  accept=['msgpack', 'application/msgpack'],
                                                                  no_ack=False)
-
         if not hasattr(self.tdata, 'buffer'):
             self.tdata.buffer = deque()
 
@@ -72,6 +72,7 @@ class AMQPChannelLayer(BaseChannelLayer):
             self.tdata.routing_keys = set()
 
     def recover(self):
+        self._init_thread()
         self.tdata.connection.ensure_connection(max_retries=5)
         self.tdata.consumer.revive(self.tdata.connection.channel())
 
