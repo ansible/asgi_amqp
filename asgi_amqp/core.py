@@ -74,7 +74,7 @@ class AMQPChannelLayer(BaseChannelLayer):
     def recover(self):
         self._init_thread()
         self.tdata.connection.ensure_connection(max_retries=5)
-        self.tdata.consumer.revive(self.tdata.connection.channel())
+        self.tdata.consumer.revive(self.tdata.connection.default_channel)
 
     def send(self, channel, message):
         self._init_thread()
