@@ -154,7 +154,7 @@ class AMQPChannelLayer(BaseChannelLayer):
                 channels = jsonpickle.decode(g.channels)
                 channels.update({channel: ts})
 
-            for c, ts in channels.items():
+            for c, ts in list(channels.items()):
                 now = datetime.datetime.utcnow()
                 if (now - ts).total_seconds() > self.group_expiry:
                     del channels[c]
