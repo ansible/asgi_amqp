@@ -64,7 +64,7 @@ class AMQPChannelLayer(BaseChannelLayer):
         if not hasattr(self.tdata, 'consumer'):
             self.tdata.consumer = self.tdata.connection.Consumer([], callbacks=[self.on_message],
                                                                  accept=['msgpack', 'application/msgpack'],
-                                                                 no_ack=False)
+                                                                 no_ack=True)
         if not hasattr(self.tdata, 'buffer'):
             self.tdata.buffer = deque()
 
@@ -121,7 +121,6 @@ class AMQPChannelLayer(BaseChannelLayer):
             if self.tdata.buffer:
                 message = self.tdata.buffer.popleft()
                 channel = routing_key_to_channel(message.delivery_info['routing_key'])
-                message.ack()
                 return channel, self.deserialize(message.body)
 
             try:
