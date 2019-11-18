@@ -11,6 +11,8 @@ import socket
 import threading
 import datetime
 import jsonpickle
+import re
+import urllib.parse
 
 from asgiref.base_layer import BaseChannelLayer
 from collections import deque
@@ -19,6 +21,16 @@ from kombu.pools import producers
 from django.db import transaction
 from django.conf import settings
 from django.utils.module_loading import import_string
+
+
+def normalize_broker_url(value):
+    # see: https://github.com/ansible/awx/commit/6ff1fe8548745fd8e46a72c92055ef30f4c50cb9
+    parts = value.rsplit('@', 1)
+    match = re.search('(amqp://[^:]+:)(.*)', parts[0])
+    if match:
+        prefix, password = match.group(1), match.group(2)
+        parts[0] = prefix + urllib.parse.quote(password)
+    return '@'.join(parts)
 
 
 class AMQPChannelLayer(BaseChannelLayer):
@@ -47,6 +59,8 @@ class AMQPChannelLayer(BaseChannelLayer):
             channel_capacity=channel_capacity,
         )
 
+        if url:
+            url = normalize_broker_url(url)
         self.url = url or 'amqp://guest:guest@localhost:5672/%2F'
         self.prefix = prefix + 'tower:websocket'
         self.exchange = kombu.Exchange(self.prefix, type='topic')
