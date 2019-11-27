@@ -1,3 +1,8 @@
+1.1.4 (2019-11-26)
+------------------
+* Fix a bug caused by broker URLs with special
+  characters (like #)
+
 1.1.3 (2018-01-02)
 ------------------
 * Do not require acking messages as this can
